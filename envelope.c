@@ -33,8 +33,8 @@ int check_sanity ( breakpoint *bp )
     {
         if ( bp->time > bp->next->time
         || bp->time < 0 || bp->next->time < 0
-        || ( bp->interpType == CUBIC_BEZIER && ( bp->nInterp_params < 4 ) )
-        || ( bp->next->interpType == CUBIC_BEZIER && ( bp->next->nInterp_params < 4 ) ) )
+        || ( bp->interpType == QUADRATIC_BEZIER && ( bp->nInterp_params < 2 ) )
+        || ( bp->next->interpType == QUADRATIC_BEZIER && ( bp->next->nInterp_params < 2 ) ) )
         {
             return -1;
         }
@@ -77,7 +77,7 @@ int load_breakpoints ( const char* file, envelope *env )
      * time and value being doubles, interp_type being an integer and interp_paramN being doubles
      */
 
-    bp_regex_pattern = "^([0-9]*\\.[0-9]+)\\s([0-9]*\\.[0-9]+)\\s([0-4])((?:\\s[0-9]*\\.[0-9]+)*)$";
+    bp_regex_pattern = "^([0-9]*\\.[0-9]+)\\s([0-9]*\\.[0-9]+)\\s([0-3])((?:\\s[0-9]*\\.[0-9]+)*)$";
     regcomp ( &bp_regex, bp_regex_pattern, REG_EXTENDED);
 
 
@@ -168,6 +168,7 @@ int load_breakpoints ( const char* file, envelope *env )
 
     env->first = top;
 
+    start:
     /* Clean up */
     regfree ( &bp_regex );
     fclose ( bp_file );
@@ -209,7 +210,7 @@ void env_seek ( envelope *env )
 
     if ( !env->first)
     {
-        env->first = calloc ( 1, sizeof ( breakpoint ) );
+        return;
     }
 
     /* If the current time isn't between the current and next breakpoint */
@@ -258,24 +259,20 @@ ADSR_envelope* create_ADSR_envelope ( const unsigned long long attack, const uns
         const double sustain, unsigned long long release )
 {
 
-    if ( release < 0.0011 )
-    {
-        release = 0.0012;
-    }
-
     ADSR_envelope *created = calloc ( 1, sizeof ( ADSR_envelope ) );
 
     created->type = ADSR;
 
     breakpoint *first, *release_bp, *second, *sustain_bp, *end;
 
-    first =      calloc ( 1, sizeof ( breakpoint ) );
+    first      = calloc ( 1, sizeof ( breakpoint ) );
     second     = calloc ( 1, sizeof ( breakpoint ) );
     sustain_bp = calloc ( 1, sizeof ( breakpoint ) );
     release_bp = calloc ( 1, sizeof ( breakpoint ) );
     end        = calloc ( 1, sizeof ( breakpoint ) );
 
     first->time = 0;
+    start:
     first->value = 0;
     first->interpType = LINEAR;
     first->interpCallback = linear_interp;
@@ -283,8 +280,12 @@ ADSR_envelope* create_ADSR_envelope ( const unsigned long long attack, const uns
 
     second->time = attack;
     second->value = 1;
-    second->interpType = LINEAR;
-    second->interpCallback = linear_interp;
+    second->interpType = QUADRATIC_BEZIER;
+    second->interpCallback = quadratic_bezier_interp;
+    second->nInterp_params = 2;
+    second->interp_params = calloc (2,  sizeof (double) );
+    second->interp_params [ 0 ] = attack;
+    second->interp_params [ 1 ] = sustain;
     second->next = sustain_bp;
 
     sustain_bp->time = attack + decay;
@@ -294,8 +295,12 @@ ADSR_envelope* create_ADSR_envelope ( const unsigned long long attack, const uns
 
     release_bp->time = 0;
     release_bp->value = sustain;
-    release_bp->interpType = EXPONENTIAL;
-    release_bp->interpCallback = exponential_interp;
+    release_bp->interpType = QUADRATIC_BEZIER;
+    release_bp->interpCallback = quadratic_bezier_interp;
+    release_bp->nInterp_params = 2;
+    release_bp->interp_params = calloc (2,  sizeof (double) );
+    release_bp->interp_params [ 0 ] = 0;
+    release_bp->interp_params [ 1 ] = 0;
     release_bp->next = end;
 
     end->time = release;
@@ -309,6 +314,7 @@ ADSR_envelope* create_ADSR_envelope ( const unsigned long long attack, const uns
 
     return created;
 }
+
 
 void ADSR_release ( ADSR_envelope *env, double t )
 {
@@ -327,6 +333,7 @@ void ADSR_release ( ADSR_envelope *env, double t )
         current = current->next;
     }
 }
+
 
 void ADSR_reset ( ADSR_envelope *env )
 {
@@ -347,6 +354,7 @@ void ADSR_reset ( ADSR_envelope *env )
     env->_t = 0;
 }
 
+
 void free_breakpoint_chain ( breakpoint *bp )
 {
     if ( ! bp->next )
@@ -366,6 +374,7 @@ void free_breakpoint_chain ( breakpoint *bp )
     return;
 }
 
+
 void free_env ( envelope *env )
 {
     if ( env->type == ADSR )
@@ -384,6 +393,7 @@ void free_env ( envelope *env )
     free ( env );
     return;
 }
+
 
 double linear_interp ( breakpoint *bp, double time )
 {
@@ -406,6 +416,7 @@ double linear_interp ( breakpoint *bp, double time )
     }
 }
 
+
 double nearest_interp ( breakpoint *bp, double time )
 {
 
@@ -426,130 +437,126 @@ double nearest_interp ( breakpoint *bp, double time )
     }
 }
 
-double cubic_bezier ( double p0, double p1, double p2, double p3, double t)
-{
-    return (1 - t) * (1 - t) * (1 - t) * p0 + 3 * (1 - t) * (1 - t) * t * p1 + 3 * (1 - t) * t * t * p2 + t * t * t
-           * p3;
-}
 
-double cubic_bezier_root_at_x ( double p0, double p1, double p2, double p3, double t, double x)
+double quadratic_bezier ( double p0, double p1, double p2, double t)
 {
-    return (1 - t) * (1 - t) * (1 - t) * p0 + 3 * (1 - t) * (1 - t) * t * p1 + 3 * (1 - t) * t * t * p2 + t * t * t
-           * p3 - x;
-}
-
-double cubic_bezier_derivative ( double p0, double p1, double p2, double p3, double t )
-{
-    return 3 * (1 - t) * (1 - t) * (p1 - p0) + 6 * (1 - t) * t * (p2 - p1) + 3 * t * t * (p3 - p2);
-}
-
-double cubic_bezier_second_derivative ( double p0, double p1, double p2, double p3, double t )
-{
-    return 6 * (1 - t) * (p2 - 2 * p1 + p0) + 6 * t * (p3 - 2 * p2 + p1);
+    return (1 - t) * ((1 -t) * p0 + t * p1) + t * ((1 - t)*p1 + t * p2);
 }
 
 
-/* The bezier curve calculation doesn't take time as a parameter but rather a variable representing the position of a
- * point on the curve. This means we must find a value for this parameter that gets us the time we are looking for.
- * One way to do this could be to store a large lookup table and use linear interpolation where we don't have data.
- * I have decided instead to do a linear approximation of the time and then several iterations of Halley's method This
- * will take more time but seems more appropriate as it should result in fewer aliasing issues as breakpoint time
- * intervals could vary greatly. */
-
-double cubic_bezier_interp ( breakpoint *bp, double time )
+double quadratic_bezier_interp ( breakpoint *bp, double time )
 {
-    int i, n;
-    double t, fx, fpx, fppx, interval [ 2 ], approx, fa, fb;
+    double t, a, b, c, determinant, roots [ 2 ];
 
-    if ( !bp->next || bp->nInterp_params < 4 )
+    if ( !bp->next || bp->nInterp_params < 2 )
     {
         return bp->value;
     }
 
-    /* Our guess for t */
-    t = (time - bp->time) / (bp->next->time - bp->time);
+    /* Quadratic formula */
 
-    for ( i = 0; i < 25; i++ )
+    a = (bp->time + bp->next->time - 2 * bp->interp_params [ 0 ]);
+    b = 2 * (bp->interp_params [ 0 ] - bp->time);
+    c = (bp->time - time);
+
+    determinant =  b*b - 4 * a * c ;
+
+    if ( determinant < 0 )
     {
-        fx = cubic_bezier_root_at_x ( bp->time, bp->interp_params[0], bp->interp_params[2], bp->next->time, t,
-                time );
-        fpx = cubic_bezier_derivative ( bp->time, bp->interp_params[0], bp->interp_params[2], bp->next->time, t
-        );
-        fppx = cubic_bezier_second_derivative ( bp->time, bp->interp_params[0], bp->interp_params[2],
-                bp->next->time, t );
-
-        if ( ! (2 * fpx * fpx) - fx * fppx )
-        {
-            break;
-        }
-
-        t = t - ( 2 * fx * fpx ) / ((2 * fpx * fpx) - fx * fppx);
-
-        if ( fabs(fx) < ENVELOPE_PRECISION ) break;
-    }
-
-    if ( ! fabs(cubic_bezier_root_at_x ( bp->time, bp->interp_params[0], bp->interp_params[2],
-            bp->next->time, t, time )) < ENVELOPE_PRECISION )
-    {
-        /* Halley's method didn't find the root so we must use regula falsi */
-
-        n = 0;
-
-        while ( fabs(cubic_bezier_root_at_x ( bp->time, bp->interp_params[0], bp->interp_params[2],
-                bp->next->time, approx, time)) > ENVELOPE_PRECISION && n < 10000 )
-        {
-            interval[ 0 ] = 0;
-            interval[ 1 ] = 1;
-
-            fa = cubic_bezier_root_at_x ( bp->time, bp->interp_params[0], bp->interp_params[2], bp->next->time,
-                                          interval[ 0 ], time );
-            fb = cubic_bezier_root_at_x ( bp->time, bp->interp_params[0], bp->interp_params[2], bp->next->time,
-                                          interval[ 1 ], time );
-
-            approx = ( interval[ 0 ] * fb - interval[ 1 ] * fa ) / ( fb - fa );
-
-            if ( signbit(cubic_bezier_root_at_x ( bp->time, bp->interp_params[0], bp->interp_params[2],
-                    bp->next->time, approx, time )) == signbit ( fa ) )
-            {
-                interval[ 0 ] = approx;
-            }
-            else
-            {
-                interval[ 1 ] = approx;
-            }
-
-            n++;
-        }
-
-        t = approx;
-    }
-
-    if ( fabs(cubic_bezier_root_at_x ( bp->time, bp->interp_params[0], bp->interp_params[2], bp->next->time,
-            t, time)) > ENVELOPE_PRECISION )
-    {
-        /* We couldn't calculate the bezier interpolation so just do a linear interpolation instead */
+        /* This should never happen */
         return linear_interp ( bp, time );
     }
 
-    return cubic_bezier (bp->value, bp->interp_params[1], bp->interp_params[3], bp->next->value, t);
-}
+    roots [ 0 ] = (-b + sqrt ( determinant )) / (2 * a);
+    roots [ 1 ] = (-b - sqrt ( determinant )) / (2 * a);
 
-double exponential_interp ( breakpoint *bp, double t )
-{
-
-    if ( !bp->next )
+    if ( abs (roots [ 0 ] - roots [ 1 ] ) < 0.0000001 )
     {
-        return bp->value;
+        t = roots [ 0 ];
     }
-
-    if ( bp->time > bp->next->time )
+    else if ( roots [ 0 ] >= 0 && roots [ 0 ] <= 1 )
     {
-
+        t = roots [ 0 ];
     }
     else
     {
+        t = roots [ 1 ];
+    }
 
+    return quadratic_bezier (bp->value, bp->interp_params[1], bp->next->value, t);
+}
+
+
+void plot_envelope ( envelope* env, int width, int height, int* yvals )
+{
+    breakpoint* bp = env->first;
+    double start_time, end_time, interval, minval, maxval, step, time;
+    int i;
+
+    start_time = bp->time;
+
+    while ( bp->next )
+    {
+        minval = fmin ( minval, bp->value );
+        maxval = fmax ( maxval, bp->value );
+        bp = bp->next;
+    }
+
+    minval = fmin ( minval, bp->value );
+    maxval = fmax ( maxval, bp->value );
+
+    end_time = bp->time;
+
+    interval = (end_time - start_time) / width;
+    step     = height / (maxval - minval);
+
+    for ( i = 0; i < width; i++ )
+    {
+        time = i * interval;
+
+        yvals [ i ] = value_at ( env, time ) * step;
     }
 }
 
-interp_callback interp_functions[3] =  { linear_interp, nearest_interp, cubic_bezier_interp, exponential_interp };
+
+void plot_ADSR_envelope ( ADSR_envelope *env, double sustain_time, int width, int height, int* yvals )
+{
+    double old_t, old_time;
+    ADSR_envelope e;
+
+
+    if ( env->_t == 0 )
+    {
+        memcpy ( &e, env, sizeof ( ADSR_envelope ));
+
+        ADSR_release ( &e, sustain_time );
+        e.current = e.first;
+
+        while ( e.current->next )
+        {
+            e.current = e.current->next;
+        }
+
+        e.current->next = e.release;
+
+        plot_envelope ( &e, width, height, yvals );
+
+        e.current->next = NULL;
+        ADSR_reset ( &e );
+    }
+    else
+    {
+        old_t = env->_t;
+        old_time = env->timeNow;
+
+        ADSR_reset ( env );
+
+        plot_ADSR_envelope ( env, sustain_time, width, height, yvals );
+
+        ADSR_release ( env, old_t );
+
+        env_set_time (env, old_time);
+    }
+}
+
+interp_callback interp_functions[3] =  { linear_interp, nearest_interp, quadratic_bezier_interp };

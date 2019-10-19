@@ -27,24 +27,12 @@
 #define ENVELOPE_ENVELOPE_H
 
 
-#ifndef ENVELOPE_PRECISION
-    #ifdef ENVELOPE_PRECISION_MICROSECOND
-        #define ENVELOPE_PRECISION 0.000001
-    #elif defined(ENVELOPE_PRECISION_NANOSECOND)
-        #define ENVELOPE_PRECISION 0.000000001
-    #else
-        /* 10 microseconds is the default precision */
-        #define ENVELOPE_PRECISION 0.00001
-    #endif
-#endif
-
 typedef enum interp
 {
     LINEAR = 0,
     NEAREST_NEIGHBOUR = 1,
-    CUBIC_BEZIER = 2,
-    EXPONENTIAL = 3,
-    USER_DEFINED = 4
+    QUADRATIC_BEZIER = 2,
+    USER_DEFINED = 3
 } interp_t;
 
 
@@ -69,8 +57,7 @@ typedef double ( *interp_callback ) ( breakpoint*, double );
 
 double linear_interp       ( breakpoint *bp, double time );
 double nearest_interp      ( breakpoint *bp, double time );
-double cubic_bezier_interp ( breakpoint *bp, double time );
-double exponential_interp  ( breakpoint *bp, double time );
+double quadratic_bezier_interp ( breakpoint *bp, double time );
 
 extern interp_callback interp_functions[3];
 
@@ -160,5 +147,8 @@ void   ADSR_reset       ( ADSR_envelope *env );
 void   free_env ( envelope *env );
 
 ADSR_envelope* create_ADSR_envelope ( const unsigned long long attack, const unsigned long long decay, const double sustain, const unsigned long long release );
+
+void plot_envelope ( envelope* env, int width, int height, int* yvals );
+void plot_ADSR_envelope ( ADSR_envelope *env, double sustain_time, int width, int height, int* yvals );
 
 #endif //ENVELOPE_ENVELOPE_H
