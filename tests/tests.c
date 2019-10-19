@@ -28,6 +28,8 @@ static void test_load_save_breakpoints ( void **state )
     assert_int_equal ( env->first->nInterp_params, 50 );
     assert_int_equal ( env->first->next->nInterp_params, 23 );
 
+    save_breakpoints ( "testdata/test_1_sv1.bp", env );
+
     free_env ( env );
 }
 

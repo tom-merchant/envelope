@@ -26,20 +26,25 @@
 #ifndef ENVELOPE_ENVELOPE_H
 #define ENVELOPE_ENVELOPE_H
 
+
+#ifndef ENVELOPE_PRECISION
+    #ifdef ENVELOPE_PRECISION_MICROSECOND
+        #define ENVELOPE_PRECISION 0.000001
+    #elif defined(ENVELOPE_PRECISION_NANOSECOND)
+        #define ENVELOPE_PRECISION 0.000000001
+    #else
+        /* 10 microseconds is the default precision */
+        #define ENVELOPE_PRECISION 0.00001
+    #endif
+#endif
+
 typedef enum interp
 {
     LINEAR = 0,
     NEAREST_NEIGHBOUR = 1,
-    QUADRATIC = 2,
-    CUBIC = 3,
-    QUARTIC = 4,
-    SINUSOIDAL = 5,
-    EXPONENTIAL = 6,
-    LOGARITHMIC = 7,
-    CUBIC_SPLINE = 8,
-    HYPERBOLIC = 9,
-    USER_DEFINED = 10
-
+    CUBIC_BEZIER = 2,
+    EXPONENTIAL = 3,
+    USER_DEFINED = 4
 } interp_t;
 
 
@@ -64,38 +69,96 @@ typedef double ( *interp_callback ) ( breakpoint*, double );
 
 double linear_interp       ( breakpoint *bp, double time );
 double nearest_interp      ( breakpoint *bp, double time );
-double quadratic_interp    ( breakpoint *bp, double time );
-double cubic_interp        ( breakpoint *bp, double time );
-double quartic_interp      ( breakpoint *bp, double time );
-double sinusoid_interp     ( breakpoint *bp, double time );
+double cubic_bezier_interp ( breakpoint *bp, double time );
 double exponential_interp  ( breakpoint *bp, double time );
-double logarithmic_interp  ( breakpoint *bp, double time );
-double cubic_spline_interp ( breakpoint *bp, double time );
-double hyperbolic_interp   ( breakpoint *bp, double time );
 
-extern interp_callback interp_functions[10];
+extern interp_callback interp_functions[3];
 
+typedef enum envelope_type
+{
+    SIMPLE,
+    ADSR
+} envelope_type;
 
 typedef struct envelope
 {
-    breakpoint *first;
-    breakpoint *current;
-    double     timeNow;
+    breakpoint    *first;
+    /**
+     * The breakpoint at the current time
+     */
+    breakpoint    *current;
+    double        timeNow;
+    /**
+     * Whether this is a simple or an ADSR envelope
+     */
+    envelope_type type;
 } envelope;
 
+typedef  struct ADSR_envelope
+{
+    breakpoint    *first;
+    breakpoint    *current;
+    double        timeNow;
+    envelope_type type;
+    breakpoint    *release;
+    double        _t;
+} ADSR_envelope;
 
-int    load_breakpoints ( const char* file,  envelope *env           );
-int    save_breakpoints ( const char* file,  const envelope *env     );
-void   set_time         ( envelope *env,     const double t );
-double value_at         ( envelope *env,     const double t );
 
-/**
- * Safely frees all malloc'd and calloc'd structures within env
+/***********************************************************************
+ * Reads breakpoint data from a file
+ * each line will be validated using the following regex
+ *
+ * ^([0-9]*\.[0-9]+)\s([0-9]*\.[0-9]+)\s([0-3])((?:\s[0-9]*\.[0-9]+)*)$
+ *
+ * Each line is assumed to be one breakpoint in the chain between the
+ * previous and next line.
+ *
+ * @author Tom Merchant
+ * @param file The file to load the data from
+ * @param env An envelope that already exists
+ * @return 0 on success, -1 on failure
+ ***********************************************************************/
+int    load_breakpoints ( const char* file,  envelope *env       );
+
+
+int    save_breakpoints ( const char* file,  const envelope *env );
+void   set_time         ( envelope *env,     const double t      );
+
+/**********************************************************************
+ * Gets the value of an envelope at a particular time
+ *
  * @param env
- */
-void   free_env         ( envelope *env );
+ * @param t time
+ * @return
+ *********************************************************************/
+double value_at         ( envelope *env,     const double t      );
 
 
-envelope* create_ADSR_envelope ( const unsigned long long attack, const unsigned long long decay, const double sustain, const unsigned long long release );
+/********************************************************
+ * Enters the release phase for an ADSR envelope
+ *
+ * @param env The envelope to switch to release
+ * @param t   The time at which the release occurred
+ *******************************************************/
+void   ADSR_release     ( ADSR_envelope *env, double t );
+
+
+/*************************************************
+ * Resets an ADSR envelope after the release phase
+ *
+ * @param env The envelope to reset
+ ************************************************/
+void   ADSR_reset       ( ADSR_envelope *env );
+
+
+/***************************************************************
+ * Safely frees all malloc'd and calloc'd structures within env.
+ * Safe to call on envelopes and ADSR_envelopes
+ * @param env
+ ***************************************************************/
+void   free_env ( envelope *env );
+
+ADSR_envelope* create_ADSR_envelope ( const unsigned long long attack, const unsigned long long decay, const double sustain, const unsigned long long release );
 
 #endif //ENVELOPE_ENVELOPE_H
