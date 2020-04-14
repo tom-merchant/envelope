@@ -22,7 +22,33 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include <pcre2posix.h>
+
+#define DEBIAN
+
+#ifdef DEBIAN
+/* DEBIAN WORKAROUND  */
+#undef PCRE2regcomp
+#undef PCRE2regexec
+#undef PCRE2regfree
+
+#undef regcomp
+#undef regexec
+#undef regfree
+#endif
+
+int PCRE2regcomp(regex_t *, const char *, int);
+int PCRE2regexec(const regex_t *, const char *, size_t, regmatch_t *, int);
+void PCRE2regfree(regex_t *);
+/* DEBIAN WORKAROUND */
+
+#define regcomp PCRE2regcomp
+#define regexec PCRE2regexec
+#define regfree PCRE2regfree
+
+
+
 #include <sys/stat.h>
 #include <math.h>
 
@@ -63,7 +89,6 @@ int load_breakpoints ( const char* file, envelope *env )
     {
         return -1;
     }
-
 
     /* Open file and read line by line */
     FILE *bp_file = fopen ( file, "r" );
@@ -107,13 +132,17 @@ int load_breakpoints ( const char* file, envelope *env )
                 {
                     case 1:
                         current->time = atof ( tmp );
+                        env->minTime = fmin ( env->minTime, current->time );
+                        env->maxTime = fmax ( env->maxTime, current->time );
                         break;
                     case 2:
                         current->value = atof ( tmp );
+                        env->minVal = fmin ( env->minVal, current->value );
+                        env->maxVal = fmax ( env->maxVal, current->value );
                         break;
                     case 3:
                         current->interpType = atoi ( tmp );
-                        if ( current->interpType < 3 )
+                        if ( current->interpType < USER_DEFINED )
                         {
                             current->interpCallback = interp_functions [ current->interpType ];
                         }
@@ -168,7 +197,6 @@ int load_breakpoints ( const char* file, envelope *env )
 
     env->first = top;
 
-    start:
     /* Clean up */
     regfree ( &bp_regex );
     fclose ( bp_file );
@@ -208,20 +236,34 @@ void env_seek ( envelope *env )
     int first_iteration = 1;
     double t = env->timeNow;
 
-    if ( !env->first)
+    if ( !env->first )
     {
         return;
     }
 
-    /* If the current time isn't between the current and next breakpoint */
-
-    if ( env->current->next && !(t < env->current->next->time && t > env->current->time) )
+    if ( !env->current )
     {
-        /* Then we check if it is between the next one and the one after that */
-        if ( env->current->next->next && (t < env->current->next->next->time && t > env->current->next->time) )
+        env->current = env->first;
+    }
+
+    if ( t < env->first->time )
+    {
+        env->current = env->first;
+        return;
+    }
+
+    if ( env->current->next && ( t >= env->current->time && t <= env->current->next->time ) )
+    {
+        return;
+    }
+    else
+    {
+        if ( env->current->next ) env->current = env->current->next;
+
+        if ( env->current->next &&  t >= env->current->time && t <= env->current->next->time )
         {
             /* If it is, as it should be in most cases, then we just go to the next one */
-            env->current = env->current->next;
+            return;
         }
         else
         {
@@ -229,9 +271,11 @@ void env_seek ( envelope *env )
              * breakpoint */
             do
             {
-                env->current = ( !first_iteration ? env->current->next : env->first );
+                env->current = ( !first_iteration ? env->current->next : ( env->type != ADSR ||
+                        ((ADSR_envelope*)env)->_t == 0 ) ? env->first :
+                        ((ADSR_envelope*)env)->release );
                 first_iteration = 0;
-            } while ( env->current->next && !(t < env->current->next->time && t > env->current->time) );
+            } while ( env->current->next && !(t >= env->current->time && t <= env->current->next->time) );
         }
     }
 
@@ -255,8 +299,8 @@ double env_current_value ( envelope *env )
     return env->current->interpCallback ( env->current, env->timeNow );
 }
 
-ADSR_envelope* create_ADSR_envelope ( const unsigned long long attack, const unsigned long long decay,
-        const double sustain, unsigned long long release )
+ADSR_envelope* create_ADSR_envelope ( const double attack, const double decay, const double sustain,
+        const double release )
 {
 
     ADSR_envelope *created = calloc ( 1, sizeof ( ADSR_envelope ) );
@@ -272,7 +316,6 @@ ADSR_envelope* create_ADSR_envelope ( const unsigned long long attack, const uns
     end        = calloc ( 1, sizeof ( breakpoint ) );
 
     first->time = 0;
-    start:
     first->value = 0;
     first->interpType = LINEAR;
     first->interpCallback = linear_interp;
@@ -290,8 +333,8 @@ ADSR_envelope* create_ADSR_envelope ( const unsigned long long attack, const uns
 
     sustain_bp->time = attack + decay;
     sustain_bp->value = sustain;
-    second->interpType = LINEAR;
-    first->interpCallback = linear_interp;
+    sustain_bp->interpType = NEAREST_NEIGHBOUR;
+    sustain_bp->interpCallback = nearest_interp;
 
     release_bp->time = 0;
     release_bp->value = sustain;
@@ -328,8 +371,10 @@ void ADSR_release ( ADSR_envelope *env, double t )
     while ( current )
     {
         current->time += t;
-        current->interp_params [ 0 ] += t;
-        current->interp_params [ 2 ] += t;
+        if ( current->nInterp_params > 0 )
+        {
+            current->interp_params[ 0 ] += t;
+        }
         current = current->next;
     }
 }
@@ -346,8 +391,10 @@ void ADSR_reset ( ADSR_envelope *env )
     while ( current )
     {
         current->time -= env->_t;
-        current->interp_params [ 0 ] -= env->_t;
-        current->interp_params [ 2 ] -= env->_t;
+        if ( current->nInterp_params > 0 )
+        {
+            current->interp_params[ 0 ] -= env->_t;
+        }
         current = current->next;
     }
 
@@ -399,8 +446,18 @@ double linear_interp ( breakpoint *bp, double time )
 {
     double t1, t2, v1, v2, m;
 
+    if ( time < bp->time )
+    {
+        return bp->value;
+    }
+
     if ( bp->next )
     {
+        if ( bp->next->time == bp->time )
+        {
+            return bp->next->value;
+        }
+
         t1 = bp->time;
         t2 = bp->next->time;
         v1 = bp->value;
@@ -419,10 +476,9 @@ double linear_interp ( breakpoint *bp, double time )
 
 double nearest_interp ( breakpoint *bp, double time )
 {
-
     if ( bp->next )
     {
-        if ( abs ( bp->time - time ) < abs ( bp->next->time - time ) )
+        if ( fabs ( bp->time - time ) < fabs ( bp->next->time - time ) )
         {
             return bp->value;
         }
@@ -448,7 +504,7 @@ double quadratic_bezier_interp ( breakpoint *bp, double time )
 {
     double t, a, b, c, determinant, roots [ 2 ];
 
-    if ( !bp->next || bp->nInterp_params < 2 )
+    if ( ( !bp->next || bp->nInterp_params < 2 ) || time < bp->time )
     {
         return bp->value;
     }
@@ -486,29 +542,94 @@ double quadratic_bezier_interp ( breakpoint *bp, double time )
     return quadratic_bezier (bp->value, bp->interp_params[1], bp->next->value, t);
 }
 
-
-void plot_envelope ( envelope* env, int width, int height, int* yvals )
+double exponential_interp ( breakpoint* bp, double time )
 {
-    breakpoint* bp = env->first;
-    double start_time, end_time, interval, minval, maxval, step, time;
-    int i;
+    double t1, t2, v1, v2, n;
 
-    start_time = bp->time;
-
-    while ( bp->next )
+    if ( time < bp->time )
     {
-        minval = fmin ( minval, bp->value );
-        maxval = fmax ( maxval, bp->value );
-        bp = bp->next;
+        return bp->value;
     }
 
-    minval = fmin ( minval, bp->value );
-    maxval = fmax ( maxval, bp->value );
+    if ( bp->next )
+    {
+        if ( bp->next->time == bp->time )
+        {
+            return bp->next->value;
+        }
 
-    end_time = bp->time;
+        t1 = bp->time;
+        t2 = bp->next->time;
+        v1 = bp->value;
+        v2 = bp->next->value;
 
-    interval = (end_time - start_time) / width;
-    step     = height / (maxval - minval);
+        if ( v1 < 0.0001 || v2 < 0.0001 ) return linear_interp ( bp, time );
+
+        n = ( time - t1 ) / ( t2 - t1 );
+
+        return v1 * pow ( v2 / v1, n );
+    }
+    else
+    {
+        return bp->value;
+    }
+}
+
+void insert_breakpoint ( envelope* env, breakpoint* bp )
+{
+    breakpoint* current = env->current;
+    double current_time = env->timeNow;
+
+    env_set_time ( env, bp->time );
+
+    if ( bp->time >= env->current->time )
+    {
+        bp->next = env->current->next;
+        env->current->next = bp;
+    }
+    else
+    {
+        bp->next = env->current;
+        env->current = bp;
+        env->first = bp;
+    }
+
+    env->current = current;
+    env->timeNow = current_time;
+}
+
+/*TODO: This doesn't handle envelopes with negative values*/
+void normalise_envelope ( envelope* env )
+{
+    double max = 0, coefficient;
+    breakpoint* current = env->first;
+
+    while ( current )
+    {
+        max = fmax ( max, current->value );
+        current = current->next;
+    }
+
+    coefficient = 1.0f / max;
+
+    current = env->first;
+
+    while ( current )
+    {
+        current->value *= coefficient;
+        current = current->next;
+    }
+
+    env->maxVal = 1;
+}
+
+void plot_envelope ( envelope* env, int width, int height, float* yvals )
+{
+    double interval, step, time;
+    int i;
+
+    interval = ( env->maxTime - env->minTime ) / (double)width;
+    step     = height / ( env->maxVal - env->minVal );
 
     for ( i = 0; i < width; i++ )
     {
@@ -519,7 +640,7 @@ void plot_envelope ( envelope* env, int width, int height, int* yvals )
 }
 
 
-void plot_ADSR_envelope ( ADSR_envelope *env, double sustain_time, int width, int height, int* yvals )
+void plot_ADSR_envelope ( ADSR_envelope *env, double sustain_time, int width, int height, float* yvals )
 {
     double old_t, old_time;
     ADSR_envelope e;
@@ -539,7 +660,7 @@ void plot_ADSR_envelope ( ADSR_envelope *env, double sustain_time, int width, in
 
         e.current->next = e.release;
 
-        plot_envelope ( &e, width, height, yvals );
+        plot_envelope ( (envelope*)&e, width, height, yvals );
 
         e.current->next = NULL;
         ADSR_reset ( &e );
@@ -555,8 +676,8 @@ void plot_ADSR_envelope ( ADSR_envelope *env, double sustain_time, int width, in
 
         ADSR_release ( env, old_t );
 
-        env_set_time (env, old_time);
+        env_set_time ((envelope*)env, old_time);
     }
 }
 
-interp_callback interp_functions[3] =  { linear_interp, nearest_interp, quadratic_bezier_interp };
+interp_callback interp_functions[4] =  { linear_interp, nearest_interp, quadratic_bezier_interp, exponential_interp };

@@ -26,13 +26,18 @@
 #ifndef ENVELOPE_ENVELOPE_H
 #define ENVELOPE_ENVELOPE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 typedef enum interp
 {
     LINEAR = 0,
     NEAREST_NEIGHBOUR = 1,
     QUADRATIC_BEZIER = 2,
-    USER_DEFINED = 3
+    EXPONENTIAL = 3,
+    USER_DEFINED = 4
 } interp_t;
 
 
@@ -55,11 +60,12 @@ typedef struct breakpoint
  */
 typedef double ( *interp_callback ) ( breakpoint*, double );
 
-double linear_interp       ( breakpoint *bp, double time );
-double nearest_interp      ( breakpoint *bp, double time );
+double linear_interp           ( breakpoint *bp, double time );
+double nearest_interp          ( breakpoint *bp, double time );
 double quadratic_bezier_interp ( breakpoint *bp, double time );
+double exponential_interp      ( breakpoint *bp, double time );
 
-extern interp_callback interp_functions[3];
+extern interp_callback interp_functions[4];
 
 typedef enum envelope_type
 {
@@ -75,6 +81,10 @@ typedef struct envelope
      */
     breakpoint    *current;
     double        timeNow;
+    double        minTime;
+    double        maxTime;
+    double        minVal;
+    double        maxVal;
     /**
      * Whether this is a simple or an ADSR envelope
      */
@@ -86,6 +96,10 @@ typedef  struct ADSR_envelope
     breakpoint    *first;
     breakpoint    *current;
     double        timeNow;
+    double        minTime;
+    double        maxTime;
+    double        minVal;
+    double        maxVal;
     envelope_type type;
     breakpoint    *release;
     double        _t;
@@ -146,9 +160,25 @@ void   ADSR_reset       ( ADSR_envelope *env );
  ***************************************************************/
 void   free_env ( envelope *env );
 
-ADSR_envelope* create_ADSR_envelope ( const unsigned long long attack, const unsigned long long decay, const double sustain, const unsigned long long release );
+/***************************************************************
+ * Inserts a breakpoint into the chain at the given time
+ *
+ * @param env
+ * @param bp
+ * @param time
+ ***************************************************************/
+void insert_breakpoint ( envelope* env, breakpoint* bp );
 
-void plot_envelope ( envelope* env, int width, int height, int* yvals );
-void plot_ADSR_envelope ( ADSR_envelope *env, double sustain_time, int width, int height, int* yvals );
+void normalise_envelope ( envelope* env );
+
+ADSR_envelope* create_ADSR_envelope ( const double attack, const double decay, const double sustain,
+        const double release );
+
+void plot_envelope ( envelope* env, int width, int height, float* yvals );
+void plot_ADSR_envelope ( ADSR_envelope *env, double sustain_time, int width, int height, float* yvals );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif //ENVELOPE_ENVELOPE_H
